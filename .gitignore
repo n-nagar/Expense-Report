@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+.env
+
+# Google API credentials
+credentials.json
+token.pickle
+
+# IDE specific files
+.vscode/
+.idea/
+
+# Project specific
+*.pdf
+*.txt
+
+
+# Credentials and Tokens
+# IMPORTANT: Never commit your credentials or token files.
+credentials.json
+token.json
+config.py
+!requirements.txt

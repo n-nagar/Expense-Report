@@ -1,0 +1,11 @@
+# requirements.txt
+# List of Python packages required for this project.
+# Install them using: pip install -r requirements.txt
+
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+beautifulsoup4
+python-dateutil
+pdfplumber
+

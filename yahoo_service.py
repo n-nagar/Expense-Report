@@ -4,6 +4,7 @@
 import imaplib
 import email
 from datetime import datetime
+import utils # Import the utils module to access the new function
 
 IMAP_SERVER = "imap.mail.yahoo.com"
 
@@ -55,15 +56,15 @@ def search_uber_receipts(mail_session, travel_date):
                 body = msg.get_payload(decode=True)
 
             if body:
-                # Save the HTML body for a printable receipt. This is more stable than PDF conversion.
+                # Convert the HTML body to a PDF for a printable receipt
                 html_string = body.decode('utf-8', 'ignore')
-                html_filename = f"uber_receipt_{travel_date.strftime('%Y%m%d')}_{email_id.decode()}.html"
+                pdf_filename = f"uber_receipt_{travel_date.strftime('%Y%m%d')}_{email_id.decode()}.pdf"
                 
-                with open(html_filename, "w", encoding="utf-8") as html_file:
-                    html_file.write(html_string)
-
-                print(f"  -> Successfully saved Uber receipt to {html_filename}")
-                receipts.append({"body": html_string, "filepath": html_filename})
+                if utils.convert_html_to_pdf(html_string, pdf_filename):
+                    print(f"  -> Successfully converted Uber receipt to {pdf_filename}")
+                    receipts.append({"body": html_string, "filepath": pdf_filename})
+                else:
+                    print(f"  -> Failed to convert Uber receipt to PDF.")
         
         return receipts
 

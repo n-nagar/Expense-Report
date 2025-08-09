@@ -6,6 +6,7 @@ from datetime import datetime, date, timedelta
 from dateutil.relativedelta import relativedelta
 from googleapiclient.discovery import build
 import calendar
+import time
 
 # Import project modules
 import config
@@ -26,12 +27,15 @@ def main():
     report_month = report_month_date.month
     report_year = report_month_date.year
 
-    search_start_date = report_month_date - relativedelta(months=1)
-    gmail_search_after = search_start_date.strftime('%Y/%m/%d')
-    gmail_search_before = first_day_of_current_month.strftime('%Y/%m/%d')
-
-    print(f"Generating report for: {report_month_date.strftime('%B %Y')}")
-    print(f"Searching for travel bookings received from {gmail_search_after} to {gmail_search_before}")
+    # Scrape Per Diem and Currency Rates
+    print("\n--- Scraping Per Diem & Currency Rates ---")
+    per_diem_rates = utils.get_per_diem_rates_with_selenium(report_year, report_month)
+    mie_breakdown = utils.get_mie_breakdown()
+    usd_to_inr_rate = utils.get_usd_to_inr_rate(report_month_date)
+    
+    if not per_diem_rates or not mie_breakdown or not usd_to_inr_rate:
+        print("Could not retrieve per diem or currency rates. Exiting.")
+        return
 
     # 2. Authenticate with Google Services
     creds = google_services.authenticate()
@@ -47,10 +51,14 @@ def main():
     all_flights = []
     travel_pdf_paths = []
     
+    search_start_date = report_month_date - relativedelta(months=1)
+    gmail_search_after = search_start_date.strftime('%Y/%m/%d')
+    gmail_search_before = first_day_of_current_month.strftime('%Y/%m/%d')
+    
     query = f'from:"{config.TRAVEL_EMAIL_SENDER}" has:attachment after:{gmail_search_after} before:{gmail_search_before}'
     messages = google_services.search_gmail(gmail_service, query)
     
-    print(f"Found {len(messages)} potential travel emails in Gmail.")
+    print(f"\nFound {len(messages)} potential travel emails in Gmail.")
 
     for msg in messages:
         msg_id = msg['id']
@@ -83,27 +91,11 @@ def main():
     _, num_days_in_month = calendar.monthrange(report_year, report_month)
     travel_calendar = {}
     current_location = "Bangalore"
-
-    # Create a dictionary to easily look up flights by date
-    flights_by_date = {}
-    for f in relevant_flights:
-        if f['date'] not in flights_by_date:
-            flights_by_date[f['date']] = []
-        flights_by_date[f['date']].append(f)
+    flights_by_date = {f['date']: f for f in relevant_flights}
 
     for day_num in range(1, num_days_in_month + 1):
         current_date = date(report_year, report_month, day_num)
-        
-        # On the night of a travel day, the location is the destination city.
-        if current_date in flights_by_date:
-            # Handle multiple flights in one day (connections)
-            last_flight_of_day = flights_by_date[current_date][-1]
-            if "bangalore" in last_flight_of_day['from'].lower():
-                 current_location = last_flight_of_day['to']
-        
         travel_calendar[current_date] = current_location
-
-        # If a return flight landed today, the location for the *next* day resets to Bangalore.
         if current_date in flights_by_date:
             last_flight_of_day = flights_by_date[current_date][-1]
             if "bangalore" in last_flight_of_day['to'].lower():

@@ -4,6 +4,7 @@
 import imaplib
 import email
 from datetime import datetime
+import config
 import utils # Import the utils module to access the new function
 
 IMAP_SERVER = "imap.mail.yahoo.com"
@@ -22,14 +23,13 @@ def connect_to_yahoo(email_address, app_password):
         print("Ensure you have generated and are using a 16-character 'App Password'.")
         return None
 
-def search_uber_receipts(mail_session, travel_date):
+def search_uber_receipts(mail_session, travel_date, usd_to_inr_rate):
     """
-    Searches for Uber receipts on a specific date.
-    Returns a list of email bodies.
+    Searches for Uber receipts on a specific date, saving only those over $10.
     """
     date_str = travel_date.strftime("%d-%b-%Y") # e.g., 29-Jul-2025
     search_query = f'(FROM "noreply@uber.com" SUBJECT "trip with Uber" ON "{date_str}")'
-    print(f"Executing Yahoo search with query: {search_query}")
+    if config.DEBUG_MODE: print(f"Executing Yahoo search with query: {search_query}")
 
     try:
         _, selected_mails = mail_session.search(None, search_query)
@@ -37,7 +37,7 @@ def search_uber_receipts(mail_session, travel_date):
         if not email_ids:
             return []
 
-        print(f"Found {len(email_ids)} Uber receipt(s) for {date_str}.")
+        if config.DEBUG_MODE: print(f"Found {len(email_ids)} Uber receipt(s) for {date_str}.")
         
         receipts = []
         for email_id in email_ids:
@@ -56,15 +56,39 @@ def search_uber_receipts(mail_session, travel_date):
                 body = msg.get_payload(decode=True)
 
             if body:
-                # Convert the HTML body to a PDF for a printable receipt
                 html_string = body.decode('utf-8', 'ignore')
-                pdf_filename = f"uber_receipt_{travel_date.strftime('%Y%m%d')}_{email_id.decode()}.pdf"
+                # Parse the details first to get the fare
+                uber_details = utils.parse_uber_receipt_email(html_string)
                 
-                if utils.convert_html_to_pdf(html_string, pdf_filename):
-                    print(f"  -> Successfully converted Uber receipt to {pdf_filename}")
-                    receipts.append({"body": html_string, "filepath": pdf_filename})
+                # Check if the fare exceeds $10
+                save_receipt = False
+                try:
+                    inr_fare = float(uber_details.get("fare", "0").replace(",", ""))
+                    usd_equivalent = inr_fare / usd_to_inr_rate
+                    if usd_equivalent > 10:
+                        save_receipt = True
+                        if config.DEBUG_MODE: print(f"  -> Ride fare is ₹{inr_fare:.2f} (${usd_equivalent:.2f}), saving receipt.")
+                    else:
+                        if config.DEBUG_MODE: print(f"  -> Ride fare is ₹{inr_fare:.2f} (${usd_equivalent:.2f}), skipping receipt save.")
+                except (ValueError, TypeError):
+                    print("  -> Could not parse fare to check against $10 limit.")
+
+                filepath = None
+                total_receipts = len(receipts) - 1
+                duplicate_found = (total_receipts >= 0 and receipts[total_receipts].get("fare", "0") == uber_details.get("fare", "0") and receipts[total_receipts].get("date") == uber_details.get("date") and receipts[total_receipts].get("from") == uber_details.get("from") and receipts[total_receipts].get("to") == uber_details.get("to"))
+
+                if save_receipt and not duplicate_found:
+                    html_filename = f"uber_receipt_{travel_date.strftime('%Y%m%d')}_{email_id.decode()}.html"
+                    with open(html_filename, "w", encoding="utf-8") as html_file:
+                        html_file.write(html_string)
+                    filepath = html_filename
+                
+                # Always add the ride details to the list for the spreadsheet
+                uber_details["filepath"] = filepath
+                if not duplicate_found:
+                    receipts.append(uber_details)
                 else:
-                    print(f"  -> Failed to convert Uber receipt to PDF.")
+                    if config.DEBUG_MODE: print("  -> Duplicate receipt found, skipping.")
         
         return receipts
 
@@ -76,4 +100,4 @@ def close_connection(mail_session):
     """Closes the IMAP connection."""
     if mail_session:
         mail_session.logout()
-        print("Disconnected from Yahoo Mail.")
+        if config.DEBUG_MODE: print("Disconnected from Yahoo Mail.")

@@ -6,6 +6,7 @@ import email
 from datetime import datetime
 import config
 import utils # Import the utils module to access the new function
+import os
 
 IMAP_SERVER = "imap.mail.yahoo.com"
 
@@ -81,7 +82,16 @@ def search_uber_receipts(mail_session, travel_date, usd_to_inr_rate):
                     html_filename = f"uber_receipt_{travel_date.strftime('%Y%m%d')}_{email_id.decode()}.html"
                     with open(html_filename, "w", encoding="utf-8") as html_file:
                         html_file.write(html_string)
-                    filepath = html_filename
+
+                    # Convert HTML to PDF
+                    pdf_filename = html_filename.replace(".html", ".pdf")
+                    utils.html_to_pdf_chrome(html_filename, pdf_filename)
+
+                    # Delete the HTML after conversion
+                    os.remove(html_filename)
+
+                    filepath = pdf_filename
+
                 
                 # Always add the ride details to the list for the spreadsheet
                 uber_details["filepath"] = filepath

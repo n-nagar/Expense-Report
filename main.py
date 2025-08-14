@@ -101,11 +101,10 @@ def main():
         if 'date' in f and isinstance(f['date'], date):  # ensure key exists and is a date object
             flights_by_date[f['date']].append(f)
 
-
-    #flights_by_date = {f['date']: f for f in relevant_flights}
-
+    unique_travel_dates = []
     for day_num in range(1, num_days_in_month + 1):
         current_date = date(report_year, report_month, day_num)
+        unique_travel_dates.append(current_date)
         travel_calendar[current_date] = current_location
         if current_date in flights_by_date:
             flight = flights_by_date[current_date][-1]  # Get the last flight of the day
@@ -119,19 +118,17 @@ def main():
     # 5. Search Yahoo Mail for Uber receipts
     uber_data = []
     uber_receipt_paths = []
-    if relevant_flights:
-        unique_travel_dates = sorted(list(set(f['date'] for f in relevant_flights)))
-        yahoo_mail = yahoo_service.connect_to_yahoo(config.YAHOO_EMAIL, config.YAHOO_APP_PASSWORD)
-        if yahoo_mail:
-            for travel_date in unique_travel_dates:
-                receipts = yahoo_service.search_uber_receipts(yahoo_mail, travel_date, usd_to_inr_rate)
-                if receipts:
-                    for receipt_details in receipts:
-                        receipt_details['date'] = travel_date
-                        uber_data.append(receipt_details)
-                        if receipt_details.get("filepath"):
-                            uber_receipt_paths.append(receipt_details["filepath"])
-            yahoo_service.close_connection(yahoo_mail)
+    yahoo_mail = yahoo_service.connect_to_yahoo(config.YAHOO_EMAIL, config.YAHOO_APP_PASSWORD)
+    if yahoo_mail:
+        for travel_date in unique_travel_dates:
+            receipts = yahoo_service.search_uber_receipts(yahoo_mail, travel_date, usd_to_inr_rate)
+            if receipts:
+                for receipt_details in receipts:
+                    receipt_details['date'] = travel_date
+                    uber_data.append(receipt_details)
+                    if receipt_details.get("filepath"):
+                        uber_receipt_paths.append(receipt_details["filepath"])
+        yahoo_service.close_connection(yahoo_mail)
 
     # 6. Create Google Drive folder and upload files
     if config.SAVE_TO_DRIVE:

@@ -12,3 +12,8 @@ requests
 selenium
 webdriver-manager
 forex-python
+pyobjc
+# ...existing code...
+pyobjc-core
+pyobjc-framework-Cocoa
+pyobjc-framework-WebKit

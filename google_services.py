@@ -18,24 +18,42 @@ SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets"
 ]
 
+
 def authenticate():
     """
     Handles user authentication for Google APIs.
     Creates a 'token.json' file to store access and refresh tokens.
+    Automatically re-prompts if refresh token is expired, revoked, or invalid.
+    Deletes token.json if it's no longer usable.
     """
     creds = None
+
+    # Load existing credentials if they exist
     if os.path.exists("token.json"):
         creds = Credentials.from_authorized_user_file("token.json", SCOPES)
 
+    # If no valid credentials, try refresh or full login
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
+            try:
+                creds.refresh(Request())
+            except Exception as e:
+                print(f"⚠ Refresh token failed: {e}")
+                # Delete bad token file
+                if os.path.exists("token.json"):
+                    os.remove("token.json")
+                creds = None  # Force full re-authentication
+
+        if not creds or not creds.valid:
             flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
             creds = flow.run_local_server(port=0)
+
+        # Save new credentials
         with open("token.json", "w") as token:
             token.write(creds.to_json())
+
     return creds
+
 
 def search_gmail(service, query):
     """Searches Gmail for emails matching the given query."""
@@ -86,7 +104,7 @@ def create_drive_folder(service, folder_name):
 
         file_metadata = {"name": folder_name, "mimeType": "application/vnd.google-apps.folder"}
         folder = service.files().create(body=file_metadata, fields="id").execute()
-        print(f"Created Google Drive folder: '{folder_name}'")
+        if Config.DEBUG_MODE: print(f"Created Google Drive folder: '{folder_name}'")
         return folder.get("id")
     except HttpError as error:
         print(f"An error occurred while creating Drive folder: {error}")
@@ -98,7 +116,7 @@ def upload_file_to_drive(service, file_path, folder_id):
         file_metadata = {"name": os.path.basename(file_path), "parents": [folder_id]}
         media = MediaFileUpload(file_path, resumable=True)
         file = service.files().create(body=file_metadata, media_body=media, fields="id").execute()
-        print(f"Uploaded file '{os.path.basename(file_path)}' to Drive.")
+        if Config.DEBUG_MODE: print(f"Uploaded file '{os.path.basename(file_path)}' to Drive.")
         return file.get("id")
     except HttpError as error:
         print(f"An error occurred while uploading file: {error}")
@@ -114,7 +132,7 @@ def create_google_sheet(drive_service, sheet_name, folder_id):
             "mimeType": "application/vnd.google-apps.spreadsheet",
         }
         sheet = drive_service.files().create(body=file_metadata, fields="id").execute()
-        print(f"Created Google Sheet: '{sheet_name}'")
+        if Config.DEBUG_MODE: print(f"Created Google Sheet: '{sheet_name}'")
         return sheet.get("id")
     except HttpError as error:
         print(f"An error occurred while creating Google Sheet: {error}")
@@ -142,7 +160,8 @@ def setup_spreadsheet_tabs(sheets_service, spreadsheet_id, tab_configs):
         sheets_service.spreadsheets().batchUpdate(
             spreadsheetId=spreadsheet_id, body={"requests": requests}
         ).execute()
-        print(f"Successfully created tabs: {[c['name'] for c in tab_configs]}")
+
+        if Config.DEBUG_MODE: print(f"Successfully created tabs: {[c['name'] for c in tab_configs]}")
         
         # Now, add the headers to each tab
         for config in tab_configs:
@@ -155,9 +174,11 @@ def append_values(sheets_service, spreadsheet_id, range_name, values):
     """Appends values to a sheet."""
     try:
         body = {"values": values}
+        # CORRECTED: The range for an append operation should just be the sheet name.
+        # This makes the request less ambiguous and prevents the API from duplicating rows.
         sheets_service.spreadsheets().values().append(
             spreadsheetId=spreadsheet_id,
-            range=f"{range_name}!A1",
+            range=range_name,
             valueInputOption="USER_ENTERED",
             body=body,
         ).execute()

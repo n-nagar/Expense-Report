@@ -132,16 +132,32 @@ def parse_flight_pdf(pdf_path):
                 if page_text:
                     full_text += page_text.replace('\n', ' ')
 
-            pattern = re.compile(r"(\d{1,2}-[A-Za-z]{3}-\d{4})-([A-Za-z\s]+) to ([A-Za-z\s]+)- by Air")
+            pattern = re.compile(
+                r"(\d{1,2}-[A-Za-z]{3}-\d{4})-([A-Za-z\s]+) to ([A-Za-z\s]+)- by Air.*?Departs\s+(\d{2}:\d{2}).*?(\d{2}:\d{2}).*?Arrives",
+                re.DOTALL
+        )
             matches = pattern.finditer(full_text)
 
             for match in matches:
                 date_str = match.group(1)
                 from_city = match.group(2).strip()
                 to_city = match.group(3).strip()
-                travel_date = datetime.strptime(date_str, '%d-%b-%Y').date()
-                flights.append({"date": travel_date, "from": from_city, "to": to_city})
-                if config.DEBUG_MODE: print(f"  -> Found flight in PDF: {from_city} to {to_city} on {travel_date}")
+                dep_time_str = match.group(4)
+                arr_time_str = match.group(5)
+
+                # Combine date and time strings and parse to datetime objects
+                datetime_format = "%d-%b-%Y %H:%M"
+                dep_datetime = datetime.strptime(f"{date_str} {dep_time_str}", datetime_format)
+                arr_datetime = datetime.strptime(f"{date_str} {arr_time_str}", datetime_format)
+                if config.DEBUG_MODE: print(f"  -> Found flight in PDF: {from_city} to {to_city} on {dep_datetime} to {arr_datetime}")
+
+                flights.append({
+                    "from": from_city,
+                    "to": to_city,
+                    "date": dep_datetime.date(),
+                    "departure": dep_datetime,
+                    "arrival": arr_datetime
+                })
         return flights
     except Exception as e:
         print(f"Error parsing PDF file {pdf_path}: {e}")

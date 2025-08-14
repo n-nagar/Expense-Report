@@ -5,6 +5,7 @@ import os
 from datetime import datetime, date, timedelta
 from dateutil.relativedelta import relativedelta
 from googleapiclient.discovery import build
+from collections import defaultdict
 import calendar
 import time
 
@@ -56,6 +57,7 @@ def main():
     gmail_search_before = first_day_of_current_month.strftime('%Y/%m/%d')
     
     query = f'from:"{config.TRAVEL_EMAIL_SENDER}" has:attachment after:{gmail_search_after} before:{gmail_search_before}'
+    if config.DEBUG_MODE: print(f"\nSearching Gmail for travel emails from {gmail_search_after} to {gmail_search_before}...")
     messages = google_services.search_gmail(gmail_service, query)
     
     if config.DEBUG_MODE: print(f"\nFound {len(messages)} potential travel emails in Gmail.")
@@ -71,7 +73,8 @@ def main():
                 parts_to_search.extend(part.get("parts"))
 
             filename = part.get('filename')
-            if filename and filename.startswith('GCMA') and filename.endswith('.pdf'):
+#            if filename and filename.startswith('GCMA') and filename.endswith('.pdf'):
+            if filename and filename.endswith('.pdf'):
                 pdf_path = google_services.get_gmail_attachment(gmail_service, msg_id, filename)
                 if pdf_path:
                     flights_in_pdf = utils.parse_flight_pdf(pdf_path)
@@ -80,7 +83,7 @@ def main():
                         travel_pdf_paths.append(pdf_path)
 
     # Filter for flights within the report month and sort them
-    relevant_flights = sorted([f for f in all_flights if f['date'].month == report_month and f['date'].year == report_year], key=lambda x: x['date'])
+    relevant_flights = sorted([f for f in all_flights if f['departure'].month == report_month and f['departure'].year == report_year], key=lambda x: x['departure'])
     
     if not relevant_flights:
         print("No relevant travel bookings found for the report month. Exiting.")
@@ -91,13 +94,21 @@ def main():
     _, num_days_in_month = calendar.monthrange(report_year, report_month)
     travel_calendar = {}
     current_location = "Bangalore"
-    flights_by_date = {f['date']: f for f in relevant_flights}
+
+    flights_by_date = defaultdict(list)
+
+    for f in relevant_flights:
+        if 'date' in f and isinstance(f['date'], date):  # ensure key exists and is a date object
+            flights_by_date[f['date']].append(f)
+
+
+    #flights_by_date = {f['date']: f for f in relevant_flights}
 
     for day_num in range(1, num_days_in_month + 1):
         current_date = date(report_year, report_month, day_num)
         travel_calendar[current_date] = current_location
         if current_date in flights_by_date:
-            flight = flights_by_date[current_date]
+            flight = flights_by_date[current_date][-1]  # Get the last flight of the day
             if "bangalore" in flight['to'].lower():
                 travel_calendar[current_date] = flight['from']
                 current_location = "Bangalore"
@@ -124,6 +135,7 @@ def main():
 
     # 6. Create Google Drive folder and upload files
     if config.SAVE_TO_DRIVE:
+        base_folder_name = "https://drive.google.com/drive/folders/1dGFeh28Bzb0jPnJ9VmMoRR3xR-Avkp9Y?usp=sharing"
         drive_folder_name = report_month_date.strftime("%m-%Y")
         folder_id = google_services.create_drive_folder(drive_service, drive_folder_name)    
         if folder_id:

@@ -86,7 +86,7 @@ def create_drive_folder(service, folder_name):
 
         file_metadata = {"name": folder_name, "mimeType": "application/vnd.google-apps.folder"}
         folder = service.files().create(body=file_metadata, fields="id").execute()
-        if Config.DEBUG_MODE: print(f"Created Google Drive folder: '{folder_name}'")
+        print(f"Created Google Drive folder: '{folder_name}'")
         return folder.get("id")
     except HttpError as error:
         print(f"An error occurred while creating Drive folder: {error}")
@@ -98,7 +98,7 @@ def upload_file_to_drive(service, file_path, folder_id):
         file_metadata = {"name": os.path.basename(file_path), "parents": [folder_id]}
         media = MediaFileUpload(file_path, resumable=True)
         file = service.files().create(body=file_metadata, media_body=media, fields="id").execute()
-        if Config.DEBUG_MODE: print(f"Uploaded file '{os.path.basename(file_path)}' to Drive.")
+        print(f"Uploaded file '{os.path.basename(file_path)}' to Drive.")
         return file.get("id")
     except HttpError as error:
         print(f"An error occurred while uploading file: {error}")
@@ -114,7 +114,7 @@ def create_google_sheet(drive_service, sheet_name, folder_id):
             "mimeType": "application/vnd.google-apps.spreadsheet",
         }
         sheet = drive_service.files().create(body=file_metadata, fields="id").execute()
-        if Config.DEBUG_MODE: print(f"Created Google Sheet: '{sheet_name}'")
+        print(f"Created Google Sheet: '{sheet_name}'")
         return sheet.get("id")
     except HttpError as error:
         print(f"An error occurred while creating Google Sheet: {error}")
@@ -142,8 +142,7 @@ def setup_spreadsheet_tabs(sheets_service, spreadsheet_id, tab_configs):
         sheets_service.spreadsheets().batchUpdate(
             spreadsheetId=spreadsheet_id, body={"requests": requests}
         ).execute()
-
-        if Config.DEBUG_MODE: print(f"Successfully created tabs: {[c['name'] for c in tab_configs]}")
+        print(f"Successfully created tabs: {[c['name'] for c in tab_configs]}")
         
         # Now, add the headers to each tab
         for config in tab_configs:
@@ -156,11 +155,9 @@ def append_values(sheets_service, spreadsheet_id, range_name, values):
     """Appends values to a sheet."""
     try:
         body = {"values": values}
-        # CORRECTED: The range for an append operation should just be the sheet name.
-        # This makes the request less ambiguous and prevents the API from duplicating rows.
         sheets_service.spreadsheets().values().append(
             spreadsheetId=spreadsheet_id,
-            range=range_name,
+            range=f"{range_name}!A1",
             valueInputOption="USER_ENTERED",
             body=body,
         ).execute()

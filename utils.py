@@ -17,6 +17,8 @@ from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 import os
 import base64
+import requests
+from datetime import date
 
 def html_to_pdf_chrome(html_path, pdf_path):
     chrome_options = webdriver.ChromeOptions()
@@ -47,8 +49,12 @@ def html_to_pdf_chrome(html_path, pdf_path):
         f.write(pdf_data)
 
     driver.quit()
-
 def get_usd_to_inr_rate(report_date):
+    url = f"https://api.frankfurter.app/{report_date.isoformat()}"
+    params = {"from": "USD", "to": "INR"}
+    return requests.get(url, params=params).json()["rates"]["INR"]
+
+def get_usd_to_inr_rate_old(report_date):
     """
     Gets the USD to INR conversion rate for a specific date.
     Uses the middle of the month for a stable average.
@@ -58,8 +64,8 @@ def get_usd_to_inr_rate(report_date):
     
     # Setup Selenium WebDriver
     options = webdriver.ChromeOptions()
-    options.page_load_strategy = 'eager' # As requested, for faster interaction
-    options.add_argument('--headless') # Run in background without opening a browser window
+    options.page_load_strategy = 'normal' # As requested, for faster interaction
+    #options.add_argument('--headless') # Run in background without opening a browser window
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
@@ -70,6 +76,7 @@ def get_usd_to_inr_rate(report_date):
         driver.get(url)
         
         # Wait for the country dropdown to be present before interacting with it.
+        date_input = wait.until(EC.visibility_of_element_located((By.XPATH, "//input[@aria-label='Date']")))
         date_selector = wait.until(EC.presence_of_element_located((By.XPATH, '/html/body/div[1]/main/div[2]/div/div/div[3]/div/div[1]/div[1]/div/div[3]/div[1]/div[2]/div/div/input')))
         date_selector.value = report_date.strftime('%Y-%m-%d')
         time.sleep(5)  # Allow time for the page to update with the new date
@@ -95,8 +102,8 @@ def get_per_diem_rates_with_selenium(year, month, country_name="India"):
     rates = {}
     
     # Setup Selenium WebDriver
-    options = webdriver.ChromeOptions()
-    options.page_load_strategy = 'eager' # As requested, for faster interaction
+    options = webdriver.ChromeOptions() 
+    options.page_load_strategy = 'normal' # As requested, for faster interaction
     options.add_argument('--headless') # Run in background without opening a browser window
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
@@ -214,43 +221,74 @@ def find_fare_city(address):
 def parse_uber_receipt_email(email_body):
     """
     Parses the HTML content of an Uber receipt email to extract trip details.
+    Supports both old and new Uber email formats.
     """
     soup = BeautifulSoup(email_body, 'html.parser')
     details = {"from": "N/A", "to": "N/A", "fare": "N/A", "date": None, "fare-city": "N/A"}
 
     try:
-        total_header_tag = soup.find('td', class_='total_head', string='Total')
-        if total_header_tag:
-            total_value_tag = total_header_tag.find_next_sibling('td', class_='total_head')
-            if total_value_tag:
-                fare_match = re.search(r'[\d,]+\.\d{2}', total_value_tag.get_text())
-                if fare_match:
-                    details["fare"] = fare_match.group(0)
+        # === FARE EXTRACTION ===
+        # New format: <td class="total-fare-amount">₹317.20</td>
+        fare_tag = soup.find('td', class_='total-fare-amount')
+        if fare_tag:
+            fare_match = re.search(r'[\d,]+\.\d{2}', fare_tag.get_text())
+            if fare_match:
+                details["fare"] = fare_match.group(0)
+        else:
+            # Old format: <td class="total_head">Total</td> followed by sibling
+            total_header_tag = soup.find('td', class_='total_head', string='Total')
+            if total_header_tag:
+                total_value_tag = total_header_tag.find_next_sibling('td', class_='total_head')
+                if total_value_tag:
+                    fare_match = re.search(r'[\d,]+\.\d{2}', total_value_tag.get_text())
+                    if fare_match:
+                        details["fare"] = fare_match.group(0)
 
-        header_date_tag = soup.find('span', class_='Uber18_text_p1', string=re.compile(r'\w+\s\d{1,2},\s\d{4}'))
-        if header_date_tag:
-            details["date"] = parse_date(header_date_tag.get_text(strip=True)).date()
-        
-        time_pattern = re.compile(r'\d{1,2}:\d{2}\s*(?:AM|PM)')
-        time_tags = soup.find_all(string=time_pattern)
-        
+        # === DATE EXTRACTION ===
+        # New format: <div class="date">Mar 21, 2026 , 11:04 AM</div>
+        date_div = soup.find('div', class_='date')
+        if date_div:
+            date_text = date_div.get_text(strip=True)
+            # Extract just the date part (before the time)
+            date_match = re.search(r'([A-Za-z]+\s+\d{1,2},\s*\d{4})', date_text)
+            if date_match:
+                details["date"] = parse_date(date_match.group(1)).date()
+        else:
+            # Old format: <span class="Uber18_text_p1">
+            header_date_tag = soup.find('span', class_='Uber18_text_p1', string=re.compile(r'\w+\s\d{1,2},\s\d{4}'))
+            if header_date_tag:
+                details["date"] = parse_date(header_date_tag.get_text(strip=True)).date()
+
+        # === ADDRESS EXTRACTION ===
+        # New format: <td class="address-point-desc"> contains the address
+        address_descs = soup.find_all('td', class_='address-point-desc')
         addresses = []
-        for tag in time_tags:
-            tr_time = tag.find_parent('tr')
-            if tr_time:
-                tr_address = tr_time.find_next_sibling('tr')
-                if tr_address:
-                    address_tag = tr_address.find('td')
-                    if address_tag:
-                        address = address_tag.get_text(strip=True)
-                        if len(address) > 5:
-                            addresses.append(address)
-        
+        for desc in address_descs:
+            address = desc.get_text(strip=True)
+            if len(address) > 10 and address not in addresses:
+                addresses.append(address)
+
+        # Fallback: Old format using time pattern
+        if len(addresses) < 2:
+            time_pattern = re.compile(r'\d{1,2}:\d{2}\s*(?:AM|PM)')
+            time_tags = soup.find_all(string=time_pattern)
+            for tag in time_tags:
+                tr_time = tag.find_parent('tr')
+                if tr_time:
+                    tr_address = tr_time.find_next_sibling('tr')
+                    if tr_address:
+                        address_tag = tr_address.find('td')
+                        if address_tag:
+                            address = address_tag.get_text(strip=True)
+                            if len(address) > 10 and address not in addresses:
+                                addresses.append(address)
+
         if len(addresses) >= 2:
             details["from"] = addresses[0]
             details["to"] = addresses[1]
-            details["fare-city"] = find_fare_city(details["from"])  
+            details["fare-city"] = find_fare_city(details["from"])
+
     except Exception as e:
         print(f"Warning: An error occurred while parsing Uber receipt: {e}")
-    
+
     return details

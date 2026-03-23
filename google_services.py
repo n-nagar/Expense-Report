@@ -15,7 +15,8 @@ from googleapiclient.http import MediaFileUpload
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/drive",
-    "https://www.googleapis.com/auth/spreadsheets"
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/calendar.readonly"
 ]
 
 
@@ -185,3 +186,145 @@ def append_values(sheets_service, spreadsheet_id, range_name, values):
         print(f"Successfully wrote {len(values)} row(s) to tab '{range_name}'.")
     except HttpError as error:
         print(f"An error occurred appending values to sheet: {error}")
+
+
+def copy_google_sheet(drive_service, template_file_id: str, name: str, folder_id: str) -> str:
+    """Copies a Google Sheet template to a new location."""
+    body = {
+        "name": name,
+        "parents": [folder_id]
+    }
+    copied = drive_service.files().copy(
+        fileId=template_file_id,
+        body=body
+    ).execute()
+    return copied["id"]
+
+def copy_and_convert_to_sheet(drive_service, template_file_id: str, name: str, folder_id: str) -> str:
+    """
+    Copies a file (e.g., .xlsx, .csv) and converts it into a native Google Sheet.
+    
+    Args:
+        drive_service: The authenticated Google Drive API service object.
+        template_file_id: The ID of the source file to copy (e.g., an Excel file).
+        name: The name for the new Google Sheet.
+        folder_id: The ID of the folder where the new sheet will be created.
+
+    Returns:
+        The file ID of the newly created Google Sheet.
+    """
+    body = {
+        "name": name,
+        "parents": [folder_id],
+        # This is the key that forces the conversion to a Google Sheet ✨
+        "mimeType": "application/vnd.google-apps.spreadsheet"
+    }
+    
+    copied_sheet = drive_service.files().copy(
+        fileId=template_file_id,
+        body=body
+    ).execute()
+    
+    print(f"Successfully created Google Sheet '{name}' with ID: {copied_sheet['id']}")
+    return copied_sheet["id"]
+
+def clear_values(sheets_service, spreadsheet_id: str, a1_range: str):
+    sheets_service.spreadsheets().values().clear(
+        spreadsheetId=spreadsheet_id,
+        range=a1_range,
+        body={}
+    ).execute()
+
+def update_values(sheets_service, spreadsheet_id: str, a1_range: str, values: list[list[str | float]]):
+    sheets_service.spreadsheets().values().update(
+        spreadsheetId=spreadsheet_id,
+        range=a1_range,
+        valueInputOption="USER_ENTERED",   # keep formulas working
+        body={"values": values}
+    ).execute()
+
+
+def search_calendar_events(calendar_service, company_names: list, start_date, end_date):
+    """
+    Searches Google Calendar for events matching any of the company names.
+    Returns a list of dates where matching events are found.
+
+    Args:
+        calendar_service: The authenticated Google Calendar API service object.
+        company_names: List of company names to search for in event titles.
+        start_date: Start date for the search range (datetime.date).
+        end_date: End date for the search range (datetime.date).
+
+    Returns:
+        List of datetime.date objects where matching calendar events exist.
+    """
+    from datetime import datetime, timedelta
+
+    # Convert dates to RFC3339 format for Calendar API
+    time_min = datetime.combine(start_date, datetime.min.time()).isoformat() + 'Z'
+    time_max = datetime.combine(end_date + timedelta(days=1), datetime.min.time()).isoformat() + 'Z'
+
+    matching_dates = []
+
+    try:
+        events_result = calendar_service.events().list(
+            calendarId='primary',
+            timeMin=time_min,
+            timeMax=time_max,
+            singleEvents=True,
+            orderBy='startTime'
+        ).execute()
+
+        events = events_result.get('items', [])
+
+        for event in events:
+            event_summary = event.get('summary', '').lower()
+
+            # Check if any company name matches the event title
+            for company in company_names:
+                if company.lower() in event_summary:
+                    # Extract the date from the event
+                    start = event['start'].get('dateTime', event['start'].get('date'))
+                    if 'T' in start:
+                        # DateTime format: 2026-01-15T10:00:00+05:30
+                        event_date = datetime.fromisoformat(start.replace('Z', '+00:00')).date()
+                    else:
+                        # All-day event: 2026-01-15
+                        event_date = datetime.strptime(start, '%Y-%m-%d').date()
+
+                    if event_date not in matching_dates:
+                        matching_dates.append(event_date)
+                        if Config.DEBUG_MODE:
+                            print(f"  -> Found calendar event: '{event.get('summary')}' on {event_date}")
+                    break
+
+        return sorted(matching_dates)
+
+    except HttpError as error:
+        print(f"An error occurred while searching calendar: {error}")
+        return []
+
+if __name__ == "__main__":
+    creds = authenticate()
+    if not creds:
+        print("Failed to authenticate with Google. Exiting.")
+        exit(1)
+        
+    drive_service = build("drive", "v3", credentials=creds)
+    sheets_service = build("sheets", "v4", credentials=creds)
+    sheet_name = "HiHiHiHi"
+
+    # 👉 Copy the March template (keeps tabs/formatting/header row positions)
+    drive_folder_name = "TestTestTest"
+    folder_id = create_drive_folder(drive_service, drive_folder_name)    
+    spreadsheet_id = copy_and_convert_to_sheet(
+        drive_service,
+        Config.TEMPLATE_SPREADSHEET_ID,
+        sheet_name,
+        folder_id
+    )
+    if not spreadsheet_id:
+        print("Failed to create Google Sheet. Exiting.")
+        exit(1)
+    clear_values(sheets_service, spreadsheet_id, "Per Diem & Lodging!A12:K9999")
+

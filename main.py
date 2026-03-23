@@ -15,18 +15,68 @@ import google_services
 import yahoo_service
 import utils
 
+def get_report_month_year():
+    """Prompts the user to select the month and year for the expense report."""
+    today = date.today()
+    default_month = (today.replace(day=1) - relativedelta(days=1)).month
+    default_year = (today.replace(day=1) - relativedelta(days=1)).year
+
+    print("\n--- Select Report Period ---")
+    print(f"Default: {calendar.month_name[default_month]} {default_year} (previous month)")
+
+    # Prompt for year
+    year_input = input(f"Enter year [{default_year}]: ").strip()
+    if year_input:
+        try:
+            report_year = int(year_input)
+        except ValueError:
+            print(f"Invalid year. Using default: {default_year}")
+            report_year = default_year
+    else:
+        report_year = default_year
+
+    # Prompt for month
+    print("\nMonths: 1=Jan, 2=Feb, 3=Mar, 4=Apr, 5=May, 6=Jun,")
+    print("        7=Jul, 8=Aug, 9=Sep, 10=Oct, 11=Nov, 12=Dec")
+    month_input = input(f"Enter month number [{default_month}]: ").strip()
+    if month_input:
+        try:
+            report_month = int(month_input)
+            if report_month < 1 or report_month > 12:
+                print(f"Invalid month. Using default: {default_month}")
+                report_month = default_month
+        except ValueError:
+            print(f"Invalid month. Using default: {default_month}")
+            report_month = default_month
+    else:
+        report_month = default_month
+
+    # Prompt for per diem start day (for partial months)
+    start_day_input = input(f"Per diem start day [1]: ").strip()
+    if start_day_input:
+        try:
+            start_day = int(start_day_input)
+            _, max_day = calendar.monthrange(report_year, report_month)
+            if start_day < 1 or start_day > max_day:
+                print(f"Invalid day. Using default: 1")
+                start_day = 1
+        except ValueError:
+            print(f"Invalid day. Using default: 1")
+            start_day = 1
+    else:
+        start_day = 1
+
+    print(f"\nGenerating report for: {calendar.month_name[report_month]} {report_year} (starting day {start_day})")
+    return report_month, report_year, start_day
+
+
 def main():
     """Main function to run the expense automation."""
     print("--- Starting Expense Report Automation ---")
 
-    # 1. Determine the date range for the report
-    today = date.today()
-    first_day_of_current_month = today.replace(day=1)
-    last_day_of_report_month = first_day_of_current_month - relativedelta(days=1)
-    report_month_date = last_day_of_report_month.replace(day=1)
-
-    report_month = report_month_date.month
-    report_year = report_month_date.year
+    # 1. Determine the date range for the report (user prompted)
+    report_month, report_year, per_diem_start_day = get_report_month_year()
+    report_month_date = date(report_year, report_month, 1)
 
     # Scrape Per Diem and Currency Rates
     if config.DEBUG_MODE: print("\n--- Scraping Per Diem & Currency Rates ---")
@@ -47,14 +97,17 @@ def main():
     gmail_service = build("gmail", "v1", credentials=creds)
     drive_service = build("drive", "v3", credentials=creds)
     sheets_service = build("sheets", "v4", credentials=creds)
+    calendar_service = build("calendar", "v3", credentials=creds)
 
     # 3. Search Gmail for travel confirmation emails
+    # Look back 2 months for early bookings
     all_flights = []
     travel_pdf_paths = []
-    
-    search_start_date = report_month_date - relativedelta(months=1)
+
+    search_start_date = report_month_date - relativedelta(months=2)
+    search_end_date = report_month_date + relativedelta(months=1)
     gmail_search_after = search_start_date.strftime('%Y/%m/%d')
-    gmail_search_before = first_day_of_current_month.strftime('%Y/%m/%d')
+    gmail_search_before = search_end_date.strftime('%Y/%m/%d')
     
     query = f'from:"{config.TRAVEL_EMAIL_SENDER}" has:attachment after:{gmail_search_after} before:{gmail_search_before}'
     if config.DEBUG_MODE: print(f"\nSearching Gmail for travel emails from {gmail_search_after} to {gmail_search_before}...")
@@ -65,7 +118,7 @@ def main():
     for msg in messages:
         msg_id = msg['id']
         message_details = gmail_service.users().messages().get(userId='me', id=msg_id).execute()
-        
+
         parts_to_search = list(message_details['payload'].get('parts', []))
         while parts_to_search:
             part = parts_to_search.pop(0)
@@ -73,25 +126,48 @@ def main():
                 parts_to_search.extend(part.get("parts"))
 
             filename = part.get('filename')
-#            if filename and filename.startswith('GCMA') and filename.endswith('.pdf'):
             if filename and filename.endswith('.pdf'):
                 pdf_path = google_services.get_gmail_attachment(gmail_service, msg_id, filename)
                 if pdf_path:
                     flights_in_pdf = utils.parse_flight_pdf(pdf_path)
-                    all_flights.extend(flights_in_pdf)
-                    if pdf_path not in travel_pdf_paths:
-                        travel_pdf_paths.append(pdf_path)
+                    # Check if any flights in this PDF are for the report month
+                    has_relevant_flights = any(
+                        f['departure'].month == report_month and f['departure'].year == report_year
+                        for f in flights_in_pdf
+                    )
+                    if has_relevant_flights:
+                        all_flights.extend(flights_in_pdf)
+                        if pdf_path not in travel_pdf_paths:
+                            travel_pdf_paths.append(pdf_path)
+                    else:
+                        # Delete PDF that's not for the report month
+                        os.remove(pdf_path)
+                        if config.DEBUG_MODE:
+                            print(f"  -> Skipped PDF (no flights for {calendar.month_name[report_month]} {report_year}): {pdf_path}")
 
     # Filter for flights within the report month and sort them
     relevant_flights = sorted([f for f in all_flights if f['departure'].month == report_month and f['departure'].year == report_year], key=lambda x: x['departure'])
-    
-    if not relevant_flights:
-        print("No relevant travel bookings found for the report month. Exiting.")
-        return
+
+    # 3b. Search Google Calendar for Bangalore company meetings
+    if config.DEBUG_MODE: print("\n--- Searching Calendar for Bangalore Company Meetings ---")
+    _, num_days_in_month = calendar.monthrange(report_year, report_month)
+    month_start = date(report_year, report_month, 1)
+    month_end = date(report_year, report_month, num_days_in_month)
+
+    bangalore_meeting_dates = google_services.search_calendar_events(
+        calendar_service,
+        config.BANGALORE_COMPANIES,
+        month_start,
+        month_end
+    )
+    if config.DEBUG_MODE: print(f"Found {len(bangalore_meeting_dates)} Bangalore company meeting dates.")
+
+    # Continue even if no flights or meetings - still generate per diem report
+    if not relevant_flights and not bangalore_meeting_dates:
+        print("No travel bookings or Bangalore meetings found - generating per diem only report.")
 
     # 4. Create Travel Calendar to determine nightly location
     if config.DEBUG_MODE: print("\n--- Building Travel Calendar ---")
-    _, num_days_in_month = calendar.monthrange(report_year, report_month)
     travel_calendar = {}
     current_location = "Bangalore"
 
@@ -102,7 +178,7 @@ def main():
             flights_by_date[f['date']].append(f)
 
     unique_travel_dates = []
-    for day_num in range(1, num_days_in_month + 1):
+    for day_num in range(per_diem_start_day, num_days_in_month + 1):
         current_date = date(report_year, report_month, day_num)
         unique_travel_dates.append(current_date)
         travel_calendar[current_date] = current_location
@@ -116,15 +192,26 @@ def main():
                 current_location = flight['to']
 
     # 5. Search Yahoo Mail for Uber receipts
+    # Include both travel dates and Bangalore company meeting dates
+    uber_search_dates = set(unique_travel_dates)
+    for meeting_date in bangalore_meeting_dates:
+        uber_search_dates.add(meeting_date)
+    uber_search_dates = sorted(uber_search_dates)
+
+    if config.DEBUG_MODE:
+        print(f"\n--- Searching Uber Receipts for {len(uber_search_dates)} dates ---")
+        if bangalore_meeting_dates:
+            print(f"  (includes {len(bangalore_meeting_dates)} Bangalore company meeting dates)")
+
     uber_data = []
     uber_receipt_paths = []
     yahoo_mail = yahoo_service.connect_to_yahoo(config.YAHOO_EMAIL, config.YAHOO_APP_PASSWORD)
     if yahoo_mail:
-        for travel_date in unique_travel_dates:
-            receipts = yahoo_service.search_uber_receipts(yahoo_mail, travel_date, usd_to_inr_rate)
+        for search_date in uber_search_dates:
+            receipts = yahoo_service.search_uber_receipts(yahoo_mail, search_date, usd_to_inr_rate)
             if receipts:
                 for receipt_details in receipts:
-                    receipt_details['date'] = travel_date
+                    receipt_details['date'] = search_date
                     uber_data.append(receipt_details)
                     if receipt_details.get("filepath"):
                         uber_receipt_paths.append(receipt_details["filepath"])
@@ -140,90 +227,107 @@ def main():
                 google_services.upload_file_to_drive(drive_service, path, folder_id)
                 os.remove(path)
                 time.sleep(1) 
-            # 7. Create and populate Google Sheet
-            sheet_name = config.DRIVE_SHEET_NAME.format(month_name=report_month_date.strftime('%B'), year=report_year)
-            spreadsheet_id = google_services.create_google_sheet(drive_service, sheet_name, folder_id)
 
-            if spreadsheet_id:
-                tab_configs = [
-                    {"name": "Per Diem & Lodging", "headers": ["Date(s) Claimed:", "City, Country*", "State Department M&IE (Per Diem Rate)*", "Breakfast**", "Lunch**", "Dinner**", "Incidentals**", "Total M&IE for Date", "Lodging Cost For Night", "Running Total", "Comments"]},
-                    {"name": "Reimbursements", "headers": ["Expenditure Date (When):", "Receipt # *", "Expenditure Location (Where)", "Expenditure Currency", "Expenditure Description - Who, What, Why", "Receipt Amt in Receipt Currency", "Rate of Exchange", "US Dollar Equivalent", "Comments"]}
-                ]
-                google_services.setup_spreadsheet_tabs(sheets_service, spreadsheet_id, tab_configs)
+    # 7. Create and populate Google Sheet (MATCH MARCH TEMPLATE)
+    sheet_name = config.DRIVE_SHEET_NAME.format(month_name=report_month_date.strftime('%B'), year=report_year)
 
-        # Prepare Per Diem data
-        per_diem_rows = []
-        row_counter = 2 # Start from row 2 for the first data row
-        running_total_formula = f"=H{row_counter}"
-        for day_num in range(1, num_days_in_month + 1):
-            current_date = date(report_year, report_month, day_num)
-            location = travel_calendar.get(current_date, "Bangalore")
-            
-            bfast, lunch, dinner, incidentals, total_mie_rate, lodging = [""] * 6
-            
-            if "Bangalore" in location:
-                rates = config.PER_DIEM_RATES_USD["Bangalore"]
-                bfast, lunch, dinner, incidentals = rates["breakfast"], rates["lunch"], rates["dinner"], rates["incidentals"]
-                total_mie_rate = rates.get("total_mie", "")
-            else:
-                city_rates = per_diem_rates.get(location, per_diem_rates.get("Other"))
-                if city_rates:
-                    lodging = city_rates["lodging"]
-                    total_mie_rate = city_rates["total_mie"]
-                    breakdown = mie_breakdown.get(total_mie_rate, {})
-                    
-                    bfast = config.PER_DIEM_RATES_USD["Bangalore"]["breakfast"]
-                    lunch = breakdown.get("lunch", "")
-                    dinner = breakdown.get("dinner", "")
-                    incidentals = breakdown.get("incidentals", "")
+    # 👉 Copy the March template (keeps tabs/formatting/header row positions)
+    spreadsheet_id = google_services.copy_and_convert_to_sheet(
+        drive_service,
+        config.TEMPLATE_SPREADSHEET_ID,
+        sheet_name,
+        folder_id
+    )
 
-            total_formula = f"=SUM(D{row_counter}:G{row_counter})"
+    # Prepare Per Diem data
+    per_diem_rows = []
+    start_row_pd = 12       # matches March template
+    row_counter = start_row_pd
+    running_total_formula = f"=H{row_counter}"   # Running Total (col J) starts off equal to Total M&IE (col H)
 
-            per_diem_rows.append([
-                current_date.strftime('%Y-%m-%d'), f"{location}, India", total_mie_rate,
-                bfast, lunch, dinner, incidentals, total_formula, "", running_total_formula, ""
-            ])
-            row_counter += 1
-            running_total_formula = f"=J{row_counter-1}+H{row_counter}"
+    for day_num in range(per_diem_start_day, num_days_in_month + 1):
+        current_date = date(report_year, report_month, day_num)
+        location = travel_calendar.get(current_date, "Bangalore")
+
+        bfast, lunch, dinner, incidentals, total_mie_rate, lodging = [""] * 6
+
+        if "Bangalore" in location:
+            rates = config.PER_DIEM_RATES_USD["Bangalore"]
+            bfast, lunch, dinner, incidentals = rates["breakfast"], rates["lunch"], rates["dinner"], rates["incidentals"]
+            total_mie_rate = rates.get("total_mie", "")
+        else:
+            city_rates = per_diem_rates.get(location, per_diem_rates.get("Other"))
+            if city_rates:
+                lodging = city_rates["lodging"]
+                total_mie_rate = city_rates["total_mie"]
+                breakdown = mie_breakdown.get(total_mie_rate, {})
+                bfast = config.PER_DIEM_RATES_USD["Bangalore"]["breakfast"]
+                lunch = breakdown.get("lunch", "")
+                dinner = breakdown.get("dinner", "")
+                incidentals = breakdown.get("incidentals", "")
+
+        total_formula = f"=SUM(D{row_counter}:G{row_counter})"   # H = D+E+F+G
 
         per_diem_rows.append([
-            "", "", "", "", "", "", "TOTAL PER DIEM", f"=SUM(H2:H{row_counter-1})", "", f"=J{row_counter-1}", ""
+            current_date.strftime('%Y-%m-%d'),   # A: Date(s) Claimed:
+            f"{location}, India",                # B
+            total_mie_rate,                      # C: State Dept M&IE (Per Diem Rate)*
+            bfast, lunch, dinner, incidentals,   # D-G
+            total_formula,                       # H: Total M&IE for Date
+            "",                                  # I: Lodging Cost For Night (left blank if N/A)
+            running_total_formula,               # J: Running Total
+            ""                                   # K: Comments
         ])
+        row_counter += 1
+        running_total_formula = f"=J{row_counter-1}+H{row_counter}"
 
-        if (config.SAVE_TO_DRIVE and per_diem_rows):
-            google_services.append_values(sheets_service, spreadsheet_id, "Per Diem & Lodging", per_diem_rows)
+    # Add the total row (same position logic, but stays in data region)
+    per_diem_rows.append([
+        "", "", "", "", "", "", "TOTAL PER DIEM",
+        f"=SUM(H{start_row_pd}:H{row_counter-1})",
+        "",
+        f"=J{row_counter-1}",
+        ""
+    ])
 
-        # Prepare Reimbursements data
-        reimbursement_rows = []
-        row_counter = 2 # Start from row 2 for the first data row
-        for item in sorted(uber_data, key=lambda x: x['date']):
-            description = f"Uber from {item.get('from', 'N/A')} to {item.get('to', 'N/A')}"
-            reimbursement_rows.append([
-                item['date'].strftime('%Y-%m-%d'),
-                item['filepath'] or "",
-                item['fare-city'] or "N/A",
-                "INR",
-                description,
-                item.get('fare', 'N/A'),
-                usd_to_inr_rate,
-                f"=F{row_counter}/G{row_counter}",
-                ""
-            ])
-            row_counter += 1
-        
+    if config.SAVE_TO_DRIVE and per_diem_rows:
+        # Clear old data BELOW the first data row to avoid trailing junk (keep header row 11 and first data row 12 safe)
+        google_services.clear_values(sheets_service, spreadsheet_id, "Per Diem & Lodging!A12:K9999")
+        # Write from the first data row (A12)
+        google_services.update_values(sheets_service, spreadsheet_id, f"Per Diem & Lodging!A{start_row_pd}", per_diem_rows)
+
+    # Prepare Reimbursements data
+    reimbursement_rows = []
+    start_row_rb = 13   # matches March template
+    row_counter = start_row_rb
+
+    for item in sorted(uber_data, key=lambda x: x['date']):
+        description = f"Uber from {item.get('from', 'N/A')} to {item.get('to', 'N/A')}"
         reimbursement_rows.append([
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "TOTAL REIMBURSEMENTS",
-            f"=SUM(H2:H{row_counter-1})",
-            ""
+            item['date'].strftime('%Y-%m-%d'),   # A: Expenditure Date (When):
+            item['filepath'] or "",              # B: Receipt # *
+            item['fare-city'] or "N/A",          # C: Location (Where)
+            "INR",                               # D: Currency
+            description,                         # E: Description
+            item.get('fare', 'N/A'),             # F: Receipt Amt in Receipt Currency
+            usd_to_inr_rate,                     # G: Rate of Exchange
+            f"=F{row_counter}/G{row_counter}",   # H: US Dollar Equivalent
+            ""                                   # I: Comments
         ])
-        if config.SAVE_TO_DRIVE and reimbursement_rows:
-            google_services.append_values(sheets_service, spreadsheet_id, "Reimbursements", reimbursement_rows)
+        row_counter += 1
+
+    # Add total row
+    reimbursement_rows.append([
+        "", "", "", "", "", "", "TOTAL REIMBURSEMENTS",
+        f"=SUM(H{start_row_rb}:H{row_counter-1})",
+        ""
+    ])
+
+    if config.SAVE_TO_DRIVE and reimbursement_rows:
+        # Clear existing data below first data row (keep header at row 12, first data row 13 will be overwritten)
+        google_services.clear_values(sheets_service, spreadsheet_id, "Reimbursements!A13:I9999")
+        # Write starting at first data row (A13)
+        google_services.update_values(sheets_service, spreadsheet_id, f"Reimbursements!A{start_row_rb}", reimbursement_rows)
 
     print("\n--- Expense Report Automation Finished Successfully! ---")
     if config.SAVE_TO_DRIVE:

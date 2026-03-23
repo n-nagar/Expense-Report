@@ -102,6 +102,7 @@ def main():
     # 3. Search Gmail for travel confirmation emails
     # Look back 2 months for early bookings
     all_flights = []
+    hotel_reservations = []
     travel_pdf_paths = []
 
     search_start_date = report_month_date - relativedelta(months=2)
@@ -129,21 +130,33 @@ def main():
             if filename and filename.endswith('.pdf'):
                 pdf_path = google_services.get_gmail_attachment(gmail_service, msg_id, filename)
                 if pdf_path:
+                    # Try parsing as flight PDF
                     flights_in_pdf = utils.parse_flight_pdf(pdf_path)
-                    # Check if any flights in this PDF are for the report month
                     has_relevant_flights = any(
                         f['departure'].month == report_month and f['departure'].year == report_year
                         for f in flights_in_pdf
                     )
+
+                    # Try parsing as hotel reservation PDF
+                    hotel_info = utils.parse_hotel_reservation_pdf(pdf_path)
+                    has_relevant_hotel = False
+                    if hotel_info and hotel_info.get("checkin_date"):
+                        checkin = hotel_info["checkin_date"]
+                        has_relevant_hotel = checkin.month == report_month and checkin.year == report_year
+
                     if has_relevant_flights:
                         all_flights.extend(flights_in_pdf)
+                        if pdf_path not in travel_pdf_paths:
+                            travel_pdf_paths.append(pdf_path)
+                    elif has_relevant_hotel:
+                        hotel_reservations.append(hotel_info)
                         if pdf_path not in travel_pdf_paths:
                             travel_pdf_paths.append(pdf_path)
                     else:
                         # Delete PDF that's not for the report month
                         os.remove(pdf_path)
                         if config.DEBUG_MODE:
-                            print(f"  -> Skipped PDF (no flights for {calendar.month_name[report_month]} {report_year}): {pdf_path}")
+                            print(f"  -> Skipped PDF (not for {calendar.month_name[report_month]} {report_year}): {pdf_path}")
 
     # Filter for flights within the report month and sort them
     relevant_flights = sorted([f for f in all_flights if f['departure'].month == report_month and f['departure'].year == report_year], key=lambda x: x['departure'])
@@ -302,7 +315,15 @@ def main():
     row_counter = start_row_rb
 
     for item in sorted(uber_data, key=lambda x: x['date']):
-        description = f"Uber from {item.get('from', 'N/A')} to {item.get('to', 'N/A')}"
+        # Get the travel city for this date to help with location classification
+        travel_city = travel_calendar.get(item['date'], "Bangalore")
+        # Generate descriptive ride description (e.g., "Home to Airport", "Taj Samudra to Airport")
+        description = utils.generate_uber_description(
+            item.get('from', ''),
+            item.get('to', ''),
+            travel_city,
+            hotel_reservations
+        )
         reimbursement_rows.append([
             item['date'].strftime('%Y-%m-%d'),   # A: Expenditure Date (When):
             item['filepath'] or "",              # B: Receipt # *

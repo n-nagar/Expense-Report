@@ -75,10 +75,38 @@ def search_uber_receipts(mail_session, travel_date, usd_to_inr_rate):
                     print("  -> Could not parse fare to check against $10 limit.")
 
                 filepath = None
-                total_receipts = len(receipts) - 1
-                duplicate_found = (total_receipts >= 0 and receipts[total_receipts].get("fare", "0") == uber_details.get("fare", "0") and receipts[total_receipts].get("date") == uber_details.get("date") and receipts[total_receipts].get("from") == uber_details.get("from") and receipts[total_receipts].get("to") == uber_details.get("to"))
+                current_from = uber_details.get("from", "N/A")
+                current_to = uber_details.get("to", "N/A")
+                current_fare = uber_details.get("fare", "0")
+                has_valid_addresses = current_from != "N/A" and current_to != "N/A"
 
-                if save_receipt and not duplicate_found:
+                # Check for duplicate receipts (same fare on same date)
+                duplicate_index = None
+                for i, existing in enumerate(receipts):
+                    if existing.get("fare", "0") == current_fare:
+                        duplicate_index = i
+                        break
+
+                if duplicate_index is not None:
+                    existing = receipts[duplicate_index]
+                    existing_has_valid = existing.get("from", "N/A") != "N/A" and existing.get("to", "N/A") != "N/A"
+
+                    if has_valid_addresses and not existing_has_valid:
+                        # Replace N/A receipt with this one that has valid addresses
+                        if config.DEBUG_MODE:
+                            print(f"  -> Replacing N/A receipt with valid address version.")
+                        # Delete old PDF if exists
+                        if existing.get("filepath") and os.path.exists(existing["filepath"]):
+                            os.remove(existing["filepath"])
+                        receipts.pop(duplicate_index)
+                        # Continue to add this receipt below
+                    else:
+                        # Skip this duplicate (either both have valid addresses or this one has N/A)
+                        if config.DEBUG_MODE:
+                            print("  -> Duplicate receipt found, skipping.")
+                        continue
+
+                if save_receipt:
                     html_filename = f"uber_receipt_{travel_date.strftime('%Y%m%d')}_{email_id.decode()}.html"
                     with open(html_filename, "w", encoding="utf-8") as html_file:
                         html_file.write(html_string)
@@ -92,13 +120,9 @@ def search_uber_receipts(mail_session, travel_date, usd_to_inr_rate):
 
                     filepath = pdf_filename
 
-                
-                # Always add the ride details to the list for the spreadsheet
+                # Add receipt to list
                 uber_details["filepath"] = filepath
-                if not duplicate_found:
-                    receipts.append(uber_details)
-                else:
-                    if config.DEBUG_MODE: print("  -> Duplicate receipt found, skipping.")
+                receipts.append(uber_details)
         
         return receipts
 

@@ -158,6 +158,71 @@ def get_per_diem_rates_with_selenium(year, month, country_name="India"):
     finally:
         driver.quit()
 
+def parse_hotel_reservation_pdf(pdf_path):
+    """
+    Parses a hotel reservation PDF to extract hotel details.
+    Returns dict with hotel_name, address, checkin_date, checkout_date or None if not a hotel PDF.
+    """
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            full_text = ""
+            for page in pdf.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    full_text += page_text + "\n"
+
+            # Check if this is a hotel reservation (contains "Hotel Name" and "Checkin Date")
+            if "Hotel Name" not in full_text or "Checkin Date" not in full_text:
+                return None
+
+            hotel_info = {}
+
+            # Extract hotel name
+            hotel_match = re.search(r'Hotel Name\s+([^\n]+)', full_text)
+            if hotel_match:
+                hotel_info["hotel_name"] = hotel_match.group(1).strip()
+
+            # Extract address
+            address_match = re.search(r'Address\s+([^\n]+)', full_text)
+            if address_match:
+                # Clean up address (remove extra commas/spaces)
+                address = address_match.group(1).strip()
+                address = re.sub(r',\s*,', ',', address)  # Remove double commas
+                address = re.sub(r'\s+', ' ', address)  # Normalize spaces
+                hotel_info["address"] = address
+
+            # Extract check-in date
+            checkin_match = re.search(r'Checkin Date\s+(\d{1,2}\s+\w+\s+\d{4})', full_text)
+            if checkin_match:
+                try:
+                    hotel_info["checkin_date"] = datetime.strptime(
+                        checkin_match.group(1), "%d %b %Y"
+                    ).date()
+                except ValueError:
+                    pass
+
+            # Extract check-out date
+            checkout_match = re.search(r'CheckOut Date\s+(\d{1,2}\s+\w+\s+\d{4})', full_text)
+            if checkout_match:
+                try:
+                    hotel_info["checkout_date"] = datetime.strptime(
+                        checkout_match.group(1), "%d %b %Y"
+                    ).date()
+                except ValueError:
+                    pass
+
+            if hotel_info.get("hotel_name") and hotel_info.get("address"):
+                if config.DEBUG_MODE:
+                    print(f"  -> Found hotel reservation: {hotel_info['hotel_name']} at {hotel_info['address']}")
+                return hotel_info
+
+    except Exception as e:
+        if config.DEBUG_MODE:
+            print(f"Error parsing hotel PDF {pdf_path}: {e}")
+
+    return None
+
+
 def parse_flight_pdf(pdf_path):
     """
     Parses a flight confirmation PDF to extract travel details for all flight legs.
@@ -203,6 +268,99 @@ def parse_flight_pdf(pdf_path):
         return []
 
     
+def classify_location(address, travel_city=None, hotel_reservations=None):
+    """
+    Classifies an address into a meaningful location name.
+
+    Args:
+        address: The address string to classify
+        travel_city: Optional city context for the trip
+        hotel_reservations: Optional list of hotel dicts with 'hotel_name' and 'address' keys
+
+    Returns one of:
+    - "Home" (if in Rajajinagar)
+    - "Airport" (if contains airport keywords)
+    - Hotel name (if matches a hotel reservation address)
+    - "Hotel" (if contains generic hotel keywords)
+    - "Restaurant" (if contains restaurant keywords)
+    - Company name (if matches a known company location)
+    - City name (fallback)
+    """
+    if not address or not isinstance(address, str):
+        return "Unknown"
+
+    addr_lower = address.lower()
+
+    # Check for Home (Rajajinagar)
+    if config.HOME_AREA.lower() in addr_lower:
+        return "Home"
+
+    # Check for Airport
+    for keyword in config.AIRPORT_KEYWORDS:
+        if keyword.lower() in addr_lower:
+            return "Airport"
+
+    # Check for specific hotel from reservations (by address match)
+    if hotel_reservations:
+        for hotel in hotel_reservations:
+            hotel_addr = hotel.get("address", "").lower()
+            hotel_name = hotel.get("hotel_name", "Hotel")
+            # Check if key parts of the hotel address match
+            # Extract street/road name for matching
+            addr_parts = [p.strip() for p in hotel_addr.split(",") if len(p.strip()) > 3]
+            for part in addr_parts[:2]:  # Check first 2 parts (usually street and area)
+                if part in addr_lower:
+                    return hotel_name
+            # Also check if hotel name appears in address
+            if hotel_name.lower() in addr_lower:
+                return hotel_name
+
+    # Check for generic Hotel keywords
+    for keyword in config.HOTEL_KEYWORDS:
+        if keyword.lower() in addr_lower:
+            return "Hotel"
+
+    # Check for Restaurant
+    for keyword in config.RESTAURANT_KEYWORDS:
+        if keyword.lower() in addr_lower:
+            return "Restaurant"
+
+    # Check for known companies (search all cities)
+    for city, companies in config.COMPANIES.items():
+        for company in companies:
+            # Check if company name or part of it is in the address
+            company_parts = company.lower().split()
+            for part in company_parts:
+                if len(part) > 3 and part in addr_lower:
+                    return company
+
+    # Fallback: return the city from the address
+    city = find_fare_city(address)
+    if city and city != "NA":
+        return city
+
+    return "Location"
+
+
+def generate_uber_description(from_address, to_address, travel_city=None, hotel_reservations=None):
+    """
+    Generates a descriptive Uber ride description like:
+    - "Home to Airport"
+    - "Airport to Taj Samudra"
+    - "Taj Samudra to Airport"
+
+    Args:
+        from_address: Pickup address
+        to_address: Dropoff address
+        travel_city: Optional city context
+        hotel_reservations: Optional list of hotel dicts for matching
+    """
+    from_loc = classify_location(from_address, travel_city, hotel_reservations)
+    to_loc = classify_location(to_address, travel_city, hotel_reservations)
+
+    return f"{from_loc} to {to_loc}"
+
+
 def find_fare_city(address):
     """
     Extracts the city name from an Indian address string as the third comma-separated word from the last.

@@ -80,10 +80,23 @@ def main():
 
     # Scrape Per Diem and Currency Rates
     if config.DEBUG_MODE: print("\n--- Scraping Per Diem & Currency Rates ---")
-    per_diem_rates = utils.get_per_diem_rates_with_selenium(report_year, report_month)
+    # Scrape rates for India
+    per_diem_rates = utils.get_per_diem_rates_with_selenium(report_year, report_month, "India")
+    # Also scrape rates for Sri Lanka (for Colombo trips)
+    sri_lanka_rates = utils.get_per_diem_rates_with_selenium(report_year, report_month, "Sri Lanka")
+    if sri_lanka_rates:
+        # Mark Sri Lanka cities and merge into per_diem_rates
+        for city, rates in sri_lanka_rates.items():
+            rates["country"] = "Sri Lanka"
+            per_diem_rates[city] = rates
+    # Mark India cities
+    for city in per_diem_rates:
+        if "country" not in per_diem_rates[city]:
+            per_diem_rates[city]["country"] = "India"
+
     mie_breakdown = utils.get_mie_breakdown()
     usd_to_inr_rate = utils.get_usd_to_inr_rate(report_month_date)
-    
+
     if not per_diem_rates or not mie_breakdown or not usd_to_inr_rate:
         print("Could not retrieve per diem or currency rates. Exiting.")
         return
@@ -263,6 +276,7 @@ def main():
         location = travel_calendar.get(current_date, "Bangalore")
 
         bfast, lunch, dinner, incidentals, total_mie_rate, lodging = [""] * 6
+        country = "India"  # Default country
 
         if "Bangalore" in location:
             rates = config.PER_DIEM_RATES_USD["Bangalore"]
@@ -273,6 +287,7 @@ def main():
             if city_rates:
                 lodging = city_rates["lodging"]
                 total_mie_rate = city_rates["total_mie"]
+                country = city_rates.get("country", "India")
                 breakdown = mie_breakdown.get(total_mie_rate, {})
                 bfast = config.PER_DIEM_RATES_USD["Bangalore"]["breakfast"]
                 lunch = breakdown.get("lunch", "")
@@ -283,7 +298,7 @@ def main():
 
         per_diem_rows.append([
             current_date.strftime('%Y-%m-%d'),   # A: Date(s) Claimed:
-            f"{location}, India",                # B
+            f"{location}, {country}",            # B
             total_mie_rate,                      # C: State Dept M&IE (Per Diem Rate)*
             bfast, lunch, dinner, incidentals,   # D-G
             total_formula,                       # H: Total M&IE for Date

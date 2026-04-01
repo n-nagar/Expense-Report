@@ -95,11 +95,16 @@ def main():
             per_diem_rates[city]["country"] = "India"
 
     mie_breakdown = utils.get_mie_breakdown()
-    usd_to_inr_rate = utils.get_usd_to_inr_rate(report_month_date)
+    exchange_rates = utils.get_exchange_rates(report_month_date)
+    usd_to_inr_rate = exchange_rates.get("INR")
+    usd_to_lkr_rate = exchange_rates.get("LKR")
 
     if not per_diem_rates or not mie_breakdown or not usd_to_inr_rate:
         print("Could not retrieve per diem or currency rates. Exiting.")
         return
+
+    if config.DEBUG_MODE:
+        print(f"Exchange rates: USD to INR = {usd_to_inr_rate}, USD to LKR = {usd_to_lkr_rate}")
 
     # 2. Authenticate with Google Services
     creds = google_services.authenticate()
@@ -339,14 +344,22 @@ def main():
             travel_city,
             hotel_reservations
         )
+        # Use the correct currency and exchange rate based on what was detected in the receipt
+        currency = item.get('currency', 'INR')
+        if currency == 'LKR' and usd_to_lkr_rate:
+            exchange_rate = usd_to_lkr_rate
+        else:
+            exchange_rate = usd_to_inr_rate
+            currency = 'INR'  # Default to INR if LKR rate not available
+
         reimbursement_rows.append([
             item['date'].strftime('%Y-%m-%d'),   # A: Expenditure Date (When):
             item['filepath'] or "",              # B: Receipt # *
             item['fare-city'] or "N/A",          # C: Location (Where)
-            "INR",                               # D: Currency
+            currency,                            # D: Currency (INR or LKR)
             description,                         # E: Description
             item.get('fare', 'N/A'),             # F: Receipt Amt in Receipt Currency
-            usd_to_inr_rate,                     # G: Rate of Exchange
+            exchange_rate,                       # G: Rate of Exchange (USD to currency)
             f"=F{row_counter}/G{row_counter}",   # H: US Dollar Equivalent
             ""                                   # I: Comments
         ])

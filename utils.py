@@ -54,6 +54,36 @@ def get_usd_to_inr_rate(report_date):
     params = {"from": "USD", "to": "INR"}
     return requests.get(url, params=params).json()["rates"]["INR"]
 
+def get_exchange_rates(report_date):
+    """
+    Gets USD to INR and USD to LKR conversion rates.
+    Uses Frankfurter for INR (historical rates) and open.er-api.com for LKR.
+    Returns a dict with currency codes as keys and rates as values.
+    """
+    rates = {}
+
+    # Get INR rate from Frankfurter (supports historical dates)
+    try:
+        url = f"https://api.frankfurter.app/{report_date.isoformat()}"
+        params = {"from": "USD", "to": "INR"}
+        response = requests.get(url, params=params).json()
+        rates["INR"] = response.get("rates", {}).get("INR")
+    except Exception as e:
+        if config.DEBUG_MODE:
+            print(f"Warning: Could not fetch INR rate: {e}")
+
+    # Get LKR rate from open.er-api.com (latest rates only, but supports LKR)
+    try:
+        url = "https://open.er-api.com/v6/latest/USD"
+        response = requests.get(url).json()
+        if response.get("result") == "success":
+            rates["LKR"] = response.get("rates", {}).get("LKR")
+    except Exception as e:
+        if config.DEBUG_MODE:
+            print(f"Warning: Could not fetch LKR rate: {e}")
+
+    return rates
+
 def get_usd_to_inr_rate_old(report_date):
     """
     Gets the USD to INR conversion rate for a specific date.
@@ -382,14 +412,20 @@ def parse_uber_receipt_email(email_body):
     Supports both old and new Uber email formats.
     """
     soup = BeautifulSoup(email_body, 'html.parser')
-    details = {"from": "N/A", "to": "N/A", "fare": "N/A", "date": None, "fare-city": "N/A"}
+    details = {"from": "N/A", "to": "N/A", "fare": "N/A", "date": None, "fare-city": "N/A", "currency": "INR"}
 
     try:
         # === FARE EXTRACTION ===
-        # New format: <td class="total-fare-amount">₹317.20</td>
+        # New format: <td class="total-fare-amount">₹317.20</td> or <td class="total-fare-amount">Rs. 1,234.56</td>
         fare_tag = soup.find('td', class_='total-fare-amount')
         if fare_tag:
-            fare_match = re.search(r'[\d,]+\.\d{2}', fare_tag.get_text())
+            fare_text = fare_tag.get_text()
+            # Detect currency from symbol
+            if '₹' in fare_text:
+                details["currency"] = "INR"
+            elif 'Rs' in fare_text or 'LKR' in fare_text or 'රු' in fare_text:
+                details["currency"] = "LKR"
+            fare_match = re.search(r'[\d,]+\.\d{2}', fare_text)
             if fare_match:
                 details["fare"] = fare_match.group(0)
         else:
@@ -398,7 +434,13 @@ def parse_uber_receipt_email(email_body):
             if total_header_tag:
                 total_value_tag = total_header_tag.find_next_sibling('td', class_='total_head')
                 if total_value_tag:
-                    fare_match = re.search(r'[\d,]+\.\d{2}', total_value_tag.get_text())
+                    fare_text = total_value_tag.get_text()
+                    # Detect currency from symbol
+                    if '₹' in fare_text:
+                        details["currency"] = "INR"
+                    elif 'Rs' in fare_text or 'LKR' in fare_text or 'රු' in fare_text:
+                        details["currency"] = "LKR"
+                    fare_match = re.search(r'[\d,]+\.\d{2}', fare_text)
                     if fare_match:
                         details["fare"] = fare_match.group(0)
 

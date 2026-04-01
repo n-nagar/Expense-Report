@@ -345,6 +345,13 @@ def main():
     row_counter = start_row_rb
 
     for item in sorted(uber_data, key=lambda x: x['date']):
+        # Skip receipts that don't have valid fare data
+        fare = item.get('fare', 'N/A')
+        if fare == 'N/A' or fare == '' or fare is None:
+            if config.DEBUG_MODE:
+                print(f"  -> Skipping invalid receipt on {item.get('date')}: no fare data")
+            continue
+
         # Get the travel city for this date to help with location classification
         travel_city = travel_calendar.get(item['date'], "Bangalore")
         # Generate descriptive ride description (e.g., "Home to Airport", "Taj Samudra to Airport")
@@ -368,7 +375,7 @@ def main():
             item['fare-city'] or "N/A",          # C: Location (Where)
             currency,                            # D: Currency (INR or LKR)
             description,                         # E: Description
-            item.get('fare', 'N/A'),             # F: Receipt Amt in Receipt Currency
+            fare,                                # F: Receipt Amt in Receipt Currency
             exchange_rate,                       # G: Rate of Exchange (USD to currency)
             f"=F{row_counter}/G{row_counter}",   # H: US Dollar Equivalent
             ""                                   # I: Comments

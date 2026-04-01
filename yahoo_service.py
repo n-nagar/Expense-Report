@@ -106,12 +106,6 @@ def search_uber_receipts(mail_session, travel_date, usd_to_inr_rate):
                             print("  -> Duplicate receipt found, skipping.")
                         continue
 
-                # Only process receipts that have valid fare data
-                if current_fare == "N/A" or current_fare == "" or current_fare is None:
-                    if config.DEBUG_MODE:
-                        print(f"  -> Skipping receipt with no fare data")
-                    continue
-
                 if save_receipt:
                     html_filename = f"uber_receipt_{travel_date.strftime('%Y%m%d')}_{email_id.decode()}.html"
                     with open(html_filename, "w", encoding="utf-8") as html_file:

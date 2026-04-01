@@ -314,13 +314,23 @@ def main():
         row_counter += 1
         running_total_formula = f"=J{row_counter-1}+H{row_counter}"
 
-    # Add the total row (same position logic, but stays in data region)
+    # Add a blank row for spacing, then the total row
+    per_diem_rows.append([""] * 11)  # Blank row
+    row_counter += 1
+
+    # Add the total row - put label in column A, formulas in correct positions
     per_diem_rows.append([
-        "", "", "", "", "", "", "TOTAL PER DIEM",
-        f"=SUM(H{start_row_pd}:H{row_counter-1})",
-        "",
-        f"=J{row_counter-1}",
-        ""
+        "TOTAL PER DIEM",                        # A: Label
+        "",                                       # B
+        "",                                       # C
+        "",                                       # D
+        "",                                       # E
+        "",                                       # F
+        "",                                       # G
+        f"=SUM(H{start_row_pd}:H{row_counter-2})", # H: Sum of all daily totals
+        "",                                       # I
+        f"=J{row_counter-2}",                     # J: Final running total
+        ""                                        # K
     ])
 
     if config.SAVE_TO_DRIVE and per_diem_rows:
@@ -365,11 +375,21 @@ def main():
         ])
         row_counter += 1
 
-    # Add total row
+    # Add a blank row for spacing, then the total row
+    reimbursement_rows.append([""] * 9)  # Blank row
+    row_counter += 1
+
+    # Add the total row - put label in column A, formula in correct position
     reimbursement_rows.append([
-        "", "", "", "", "", "", "TOTAL REIMBURSEMENTS",
-        f"=SUM(H{start_row_rb}:H{row_counter-1})",
-        ""
+        "TOTAL REIMBURSEMENTS",                   # A: Label
+        "",                                        # B
+        "",                                        # C
+        "",                                        # D
+        "",                                        # E
+        "",                                        # F
+        "",                                        # G
+        f"=SUM(H{start_row_rb}:H{row_counter-2})", # H: Sum of all USD equivalents
+        ""                                         # I
     ])
 
     if config.SAVE_TO_DRIVE and reimbursement_rows:

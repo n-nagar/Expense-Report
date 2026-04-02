@@ -314,22 +314,18 @@ def main():
         row_counter += 1
         running_total_formula = f"=J{row_counter-1}+H{row_counter}"
 
-    # Add a blank row for spacing, then the total row
-    per_diem_rows.append([""] * 11)  # Blank row
-    row_counter += 1
-
-    # Add the total row - put label in column A, formulas in correct positions
+    # Add the total row - label in column G, formulas in H and J
     per_diem_rows.append([
-        "TOTAL PER DIEM",                        # A: Label
+        "",                                       # A
         "",                                       # B
         "",                                       # C
         "",                                       # D
         "",                                       # E
         "",                                       # F
-        "",                                       # G
-        f"=SUM(H{start_row_pd}:H{row_counter-2})", # H: Sum of all daily totals
+        "TOTAL PER DIEM",                         # G: Label
+        f"=SUM(H{start_row_pd}:H{row_counter-1})", # H: Sum of all daily totals
         "",                                       # I
-        f"=J{row_counter-2}",                     # J: Final running total
+        f"=J{row_counter-1}",                     # J: Final running total
         ""                                        # K
     ])
 
@@ -375,20 +371,16 @@ def main():
         ])
         row_counter += 1
 
-    # Add a blank row for spacing, then the total row
-    reimbursement_rows.append([""] * 9)  # Blank row
-    row_counter += 1
-
-    # Add the total row - put label in column A, formula in correct position
+    # Add the total row - label in column G, formula in H
     reimbursement_rows.append([
-        "TOTAL REIMBURSEMENTS",                   # A: Label
+        "",                                        # A
         "",                                        # B
         "",                                        # C
         "",                                        # D
         "",                                        # E
         "",                                        # F
-        "",                                        # G
-        f"=SUM(H{start_row_rb}:H{row_counter-2})", # H: Sum of all USD equivalents
+        "TOTAL REIMBURSEMENT",                     # G: Label (singular to match template)
+        f"=SUM(H{start_row_rb}:H{row_counter-1})", # H: Sum of all USD equivalents
         ""                                         # I
     ])
 

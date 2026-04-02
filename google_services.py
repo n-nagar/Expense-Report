@@ -293,9 +293,11 @@ def search_calendar_events(calendar_service, company_names: list, start_date, en
                         event_date = datetime.strptime(start, '%Y-%m-%d').date()
 
                     if event_date not in date_to_company:
-                        date_to_company[event_date] = company
+                        # Use display name mapping if available, otherwise use matched name
+                        display_name = Config.COMPANY_DISPLAY_NAMES.get(company.lower(), company)
+                        date_to_company[event_date] = display_name
                         if Config.DEBUG_MODE:
-                            print(f"  -> Found calendar event: '{event.get('summary')}' on {event_date} -> {company}")
+                            print(f"  -> Found calendar event: '{event.get('summary')}' on {event_date} -> {display_name}")
                     break
 
         return date_to_company

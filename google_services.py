@@ -247,7 +247,7 @@ def update_values(sheets_service, spreadsheet_id: str, a1_range: str, values: li
 def search_calendar_events(calendar_service, company_names: list, start_date, end_date):
     """
     Searches Google Calendar for events matching any of the company names.
-    Returns a list of dates where matching events are found.
+    Returns a dict mapping dates to company names found.
 
     Args:
         calendar_service: The authenticated Google Calendar API service object.
@@ -256,7 +256,7 @@ def search_calendar_events(calendar_service, company_names: list, start_date, en
         end_date: End date for the search range (datetime.date).
 
     Returns:
-        List of datetime.date objects where matching calendar events exist.
+        Dict mapping datetime.date to company name string.
     """
     from datetime import datetime, timedelta
 
@@ -264,7 +264,7 @@ def search_calendar_events(calendar_service, company_names: list, start_date, en
     time_min = datetime.combine(start_date, datetime.min.time()).isoformat() + 'Z'
     time_max = datetime.combine(end_date + timedelta(days=1), datetime.min.time()).isoformat() + 'Z'
 
-    matching_dates = []
+    date_to_company = {}
 
     try:
         events_result = calendar_service.events().list(
@@ -292,17 +292,17 @@ def search_calendar_events(calendar_service, company_names: list, start_date, en
                         # All-day event: 2026-01-15
                         event_date = datetime.strptime(start, '%Y-%m-%d').date()
 
-                    if event_date not in matching_dates:
-                        matching_dates.append(event_date)
+                    if event_date not in date_to_company:
+                        date_to_company[event_date] = company
                         if Config.DEBUG_MODE:
-                            print(f"  -> Found calendar event: '{event.get('summary')}' on {event_date}")
+                            print(f"  -> Found calendar event: '{event.get('summary')}' on {event_date} -> {company}")
                     break
 
-        return sorted(matching_dates)
+        return date_to_company
 
     except HttpError as error:
         print(f"An error occurred while searching calendar: {error}")
-        return []
+        return {}
 
 if __name__ == "__main__":
     creds = authenticate()

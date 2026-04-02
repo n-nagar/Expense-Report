@@ -185,16 +185,17 @@ def main():
     month_start = date(report_year, report_month, 1)
     month_end = date(report_year, report_month, num_days_in_month)
 
-    bangalore_meeting_dates = google_services.search_calendar_events(
+    # Returns dict mapping date -> company name
+    bangalore_meetings = google_services.search_calendar_events(
         calendar_service,
         config.BANGALORE_COMPANIES,
         month_start,
         month_end
     )
-    if config.DEBUG_MODE: print(f"Found {len(bangalore_meeting_dates)} Bangalore company meeting dates.")
+    if config.DEBUG_MODE: print(f"Found {len(bangalore_meetings)} Bangalore company meeting dates.")
 
     # Continue even if no flights or meetings - still generate per diem report
-    if not relevant_flights and not bangalore_meeting_dates:
+    if not relevant_flights and not bangalore_meetings:
         print("No travel bookings or Bangalore meetings found - generating per diem only report.")
 
     # 4. Create Travel Calendar to determine nightly location
@@ -225,14 +226,14 @@ def main():
     # 5. Search Yahoo Mail for Uber receipts
     # Include both travel dates and Bangalore company meeting dates
     uber_search_dates = set(unique_travel_dates)
-    for meeting_date in bangalore_meeting_dates:
+    for meeting_date in bangalore_meetings.keys():
         uber_search_dates.add(meeting_date)
     uber_search_dates = sorted(uber_search_dates)
 
     if config.DEBUG_MODE:
         print(f"\n--- Searching Uber Receipts for {len(uber_search_dates)} dates ---")
-        if bangalore_meeting_dates:
-            print(f"  (includes {len(bangalore_meeting_dates)} Bangalore company meeting dates)")
+        if bangalore_meetings:
+            print(f"  (includes {len(bangalore_meetings)} Bangalore company meeting dates)")
 
     uber_data = []
     uber_receipt_paths = []
@@ -358,6 +359,22 @@ def main():
             exchange_rate = usd_to_inr_rate
             currency = 'INR'  # Default to INR if LKR rate not available
 
+        # Determine the company being coached for this expense
+        expense_date = item['date']
+        if expense_date in bangalore_meetings:
+            # Bangalore meeting - get company from calendar
+            company_name = bangalore_meetings[expense_date]
+        elif travel_city in config.COMPANIES:
+            # Travel city has associated companies - use first one
+            company_name = config.COMPANIES[travel_city][0]
+        else:
+            # Try to find company by matching city name in COMPANIES keys
+            company_name = ""
+            for city, companies in config.COMPANIES.items():
+                if city.lower() in travel_city.lower() or travel_city.lower() in city.lower():
+                    company_name = companies[0]
+                    break
+
         reimbursement_rows.append([
             item['date'].strftime('%Y-%m-%d'),   # A: Expenditure Date (When):
             item['filepath'] or "",              # B: Receipt # *
@@ -367,7 +384,7 @@ def main():
             item.get('fare', 'N/A'),             # F: Receipt Amt in Receipt Currency
             exchange_rate,                       # G: Rate of Exchange (USD to currency)
             f"=F{row_counter}/G{row_counter}",   # H: US Dollar Equivalent
-            ""                                   # I: Comments
+            company_name                         # I: Company being coached
         ])
         row_counter += 1
 

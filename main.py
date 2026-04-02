@@ -344,6 +344,27 @@ def main():
     for item in sorted(uber_data, key=lambda x: x['date']):
         # Get the travel city for this date to help with location classification
         travel_city = travel_calendar.get(item['date'], "Bangalore")
+        expense_date = item['date']
+
+        # Determine the company being coached for this expense
+        # For Bangalore: must have a calendar appointment with a coaching company
+        # For travel cities: look up company from config.COMPANIES
+        if travel_city == "Bangalore" or "Bangalore" in travel_city:
+            if expense_date in bangalore_meetings:
+                company_name = bangalore_meetings[expense_date]
+            else:
+                # No Bangalore company meeting on this date - skip this expense
+                if config.DEBUG_MODE:
+                    print(f"  -> Skipping Bangalore expense on {expense_date}: no company meeting in calendar")
+                continue
+        else:
+            # Non-Bangalore travel - look up company by city
+            company_name = ""
+            for city, companies in config.COMPANIES.items():
+                if city.lower() in travel_city.lower() or travel_city.lower() in city.lower():
+                    company_name = companies[0]
+                    break
+
         # Generate descriptive ride description (e.g., "Home to Airport", "Taj Samudra to Airport")
         description = utils.generate_uber_description(
             item.get('from', ''),
@@ -358,22 +379,6 @@ def main():
         else:
             exchange_rate = usd_to_inr_rate
             currency = 'INR'  # Default to INR if LKR rate not available
-
-        # Determine the company being coached for this expense
-        expense_date = item['date']
-        if expense_date in bangalore_meetings:
-            # Bangalore meeting - get company from calendar
-            company_name = bangalore_meetings[expense_date]
-        elif travel_city in config.COMPANIES:
-            # Travel city has associated companies - use first one
-            company_name = config.COMPANIES[travel_city][0]
-        else:
-            # Try to find company by matching city name in COMPANIES keys
-            company_name = ""
-            for city, companies in config.COMPANIES.items():
-                if city.lower() in travel_city.lower() or travel_city.lower() in city.lower():
-                    company_name = companies[0]
-                    break
 
         reimbursement_rows.append([
             item['date'].strftime('%Y-%m-%d'),   # A: Expenditure Date (When):
